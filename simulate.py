@@ -8,8 +8,7 @@ import change_node as change_node
 import time
 import numpy as np
 from multiprocessing import Process
-import eventlet#导入eventlet这个模块
-eventlet.monkey_patch()#超时退出
+
 
 BUFSIZ = 1024
 
@@ -30,6 +29,9 @@ class node:
         self.timeslot_available = np.arange(1,8)
         self.timeslot_occupied = []
         self.children = []
+
+        self.applying = []
+        self.all_available = [1, 2, 3, 4, 5, 6, 7]
         # 读取拓扑，获取每个点的坐标
         self.x_list, self.y_list, self.node_num = self.get_topology()
 
@@ -82,13 +84,15 @@ class node:
     def fast_send(self):
         print("Start Fast Sending .--------------")
         F = np.random.randint(low=10, high=1000)
-        with eventlet.Timeout(20, False):  # 设置超时时间为20秒
-            while True:
-                time.sleep(0.2)
-                print("fast_sending...")
-                msg = write_json(des_address="", src_address=self.my_port, content="", master_ID=self.my_port, F=F,
-                               flag="FAST_SEND")
-                self.broadcast(msg)
+        self.F = F
+        self.F_list.append(self.F)
+        while True:
+            time.sleep(0.2)
+            print("fast_sending...")
+            msg = write_json(des_address="", src_address=self.my_port, content="", master_ID=self.my_port, F=F,
+                             flag="FAST_SEND")
+            self.broadcast(msg)
+
     def broadcast_HELLO(self):
         print("Start broadcast HELLO in period")
         while True:
@@ -119,7 +123,7 @@ class node:
                             print("Receive %s from address %d" % (flag, src_address))
                             # 向master申请入网
                             msg = write_json(des_address=master_ID, src_address=self.my_port,
-                                             content="", master_ID="", F=F, flag="APPLY")
+                                             content=[], master_ID="", F=F, flag="APPLY")
                             print("APPLY to master:", master_ID)
                             self.broadcast(msg)
                             # 等待中心节点的确认消息，如果收到ACK，入网成功。如果超时5s未收到ACK，独立建网
@@ -153,7 +157,7 @@ class node:
                 except timeout:
                     print("没有监听到周围节点")
                     recv_response = False
-                # 快发
+                # 没有发现别的节点，成为中心节点，进行扫频快发
                 if not recv_response:
                     print("开始持续20s的快发")
                     self.recv_socket.settimeout(20)
@@ -174,24 +178,28 @@ class node:
                                 self.master = True
                                 self.master_ID = self.my_port
                                 self.master_ID_list.append(self.master_ID)
-                                self.F = F
-                                self.F_list.append(self.F)
 
                                 # 如果申请入网的节点已经在另外一个网内，排除掉其已占有的时隙
-                                if content != "":
-                                    self.timeslot_available = np.setdiff1d(self.timeslot_available, content)
+                                # content 是申请节点的所有占有时隙
+                                applying_timeslot_occupied = content
+                                applying_timeslot_available = np.setdiff1d(self.all_available,
+                                                                           applying_timeslot_occupied).tolist()
+                                timeslot_available = np.intersect1d(applying_timeslot_available,
+                                                                    self.timeslot_available).tolist()
                                 # 分配自己的时隙,更新可用时隙
-                                self.timeslot = self.timeslot_available[0]
+                                self.timeslot = timeslot_available[0]
                                 self.timeslot_occupied.append(self.timeslot)
-                                self.timeslot_available = np.delete(self.timeslot_available, 0)
+                                self.timeslot_available = np.delete(self.timeslot_available,
+                                                                    np.where(self.timeslot_available==self.timeslot))
                                 # 分配申请入网节点的时隙,更新可用时隙
-                                timeslot = self.timeslot_available[0]
-                                self.timeslot_available = np.delete(self.timeslot_available, 0)
+                                allocated_timeslot = timeslot_available[1]
+                                self.timeslot_available = np.delete(self.timeslot_available,
+                                                                    np.where(self.timeslot_available==allocated_timeslot))
                                 # 发送ACK
                                 to_port = src_address
                                 self.children.append(to_port)
                                 msg = write_json(des_address=to_port, src_address=self.my_port,
-                                                 content=timeslot, master_ID=self.my_port, F=F, flag="ACK")
+                                                 content=allocated_timeslot, master_ID=self.my_port, F=F, flag="ACK")
                                 print("Send ACK back")
                                 print("子网建成，本端为中心节点%d，时隙：%s，频率：%s，网内节点：%s" % (self.my_port, str(self.timeslot_occupied),
                                                                        str(self.F_list), str(self.children)))
@@ -218,22 +226,32 @@ class node:
             if self.master:
                 # 收到申请入网消息
                 if flag == "APPLY" and des_address == self.my_port:
-                    if self.timeslot_available.size > 0:
-                        print("Receive APPLY from %d", src_address)
+                    # content 是申请节点的所有占有时隙
+                    applying_timeslot_occupied = content
+                    applying_timeslot_available = np.setdiff1d(self.all_available, applying_timeslot_occupied).tolist()
+                    timeslot_available = np.intersect1d(applying_timeslot_available, self.timeslot_available).tolist()
+                    if len(timeslot_available) > 0:
+                        print("Receive APPLY from ", src_address)
                         to_port = src_address
                         # 分配时隙
-                        content = self.timeslot_available[0]
-                        self.timeslot_available = np.delete(self.timeslot_available, 0)
+                        # content不为空，即为申请节点的占有时隙，可用时隙中去掉这些时隙
+                        allocated_timeslot = timeslot_available[0]
+
+                        self.timeslot_available = np.delete(self.timeslot_available,
+                                                            np.where(self.timeslot_available==allocated_timeslot))
                         self.children.append(to_port)
                         msg = write_json(des_address=to_port, src_address=self.my_port,
-                                         content=content, master_ID=self.my_port, F=self.F, flag="ACK")
+                                         content=allocated_timeslot, master_ID=self.my_port, F=self.F, flag="ACK")
                         self.broadcast(msg)
                         print("send back ACK to:", to_port)
                         print("本端为中心节点%d，目前子网内有%d个子节点:%s"%(self.my_port, 7-self.timeslot_available.size-1, str(self.children)))
 
-            # 如果新开机节点a无法加入本子网，进行快发，该节点在新的频率上收到了该快发消息。则该节点向a申请入网
-            if flag == "FAST_SEND" and F != self.F and len(self.timeslot_occupied)<6:
+            # 如果某新开机节点a无法加入本子网，a进行快发，该节点在新的频率上收到了a的快发消息。则该节点向a申请入网
+            # TODO F not in self.F_list，同一子网内，互相听到hello问题
+            if flag == "FAST_SEND" or flag == "HELLO" and F not in self.F_list \
+                    and len(self.timeslot_occupied)<6 and master_ID not in self.applying:
                 print("Receive %s from address %d" % (flag, src_address))
+                self.applying.append(master_ID)
                 # 向master申请入网,content是自己已占有的时隙， master分配的时候排除这些时隙
                 msg = write_json(des_address=master_ID, src_address=self.my_port,
                                  content=self.timeslot_occupied, master_ID="", F=F, flag="APPLY")
@@ -242,6 +260,9 @@ class node:
             # 收到了该节点在正常运行过程中申请入网之后的确认消息
             if flag == "ACK" and des_address == self.my_port:
                 print("Receive ACK from %d, connected to this master" % src_address)
+                if master_ID in self.applying:
+                    self.applying.remove(master_ID)
+
                 self.timeslot = content
                 self.timeslot_occupied.append(self.timeslot)
                 self.master_ID = master_ID
