@@ -60,16 +60,16 @@ class node:
         for i in range(self.node_num):
             if i!=index:
                 # 广播，距离N=5以内的节点均可以广播到
-                if math.sqrt(math.pow((self.x_list[i]-self.x_list[index]),2)+math.pow((self.y_list[i]-self.y_list[index]),2))<5:
+                if math.sqrt(math.pow((self.x_list[i]-self.x_list[index]),2)+math.pow((self.y_list[i]-self.y_list[index]),2))<3:
                     self.send(msg, i+self.port_basis+1)
 
     def get_topology(self):
         # 从文件读取拓扑
-        pkl_file = open('ylist.pkl', 'rb')
+        pkl_file = open('ylist1.pkl', 'rb')
         y_list = pickle.load(pkl_file)
         pkl_file.close()
 
-        pkl_file = open('xlist.pkl', 'rb')
+        pkl_file = open('xlist1.pkl', 'rb')
         x_list = pickle.load(pkl_file)
         pkl_file.close()
         # 端口数目
