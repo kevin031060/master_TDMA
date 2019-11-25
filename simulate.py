@@ -85,26 +85,30 @@ class node:
         print("Start Fast Sending .--------------")
         F = np.random.randint(low=10, high=1000)
         self.F = F
-        self.F_list.append(self.F)
         while True:
             time.sleep(0.2)
             print("fast_sending...")
-            msg = write_json(des_address="", src_address=self.my_port, content="", master_ID=self.my_port, F=F,
-                             flag="FAST_SEND")
+            msg = write_json(des_address="", src_address=self.my_port, content=self.timeslot_available,
+                             master_ID=self.my_port, F=F, F_list=self.F_list, flag="FAST_SEND")
             self.broadcast(msg)
 
     def broadcast_HELLO(self):
         print("Start broadcast HELLO in period")
         while True:
             time.sleep(1)
-            msg = write_json(des_address="", src_address=self.my_port, content="", master_ID=self.master_ID, F=self.F,
-                             flag="HELLO")
-            print("broadcasting HELLO")
+            msg = write_json(des_address="", src_address=self.my_port, content=self.timeslot_available,
+                             master_ID=self.master_ID, F=self.F, F_list=self.F_list, flag="HELLO")
+            if self.master:
+                print("HELLO:本端%d为中心节点%d，子网中有：%s，占用时隙%s, 可用时隙%s" % (self.my_port,self.F, str(self.children),
+                                                               str(self.timeslot_occupied), str(self.timeslot_available)))
+            else:
+                print("HELLO:本端%d，所在的子网%s，中心节点ID%s，占用时隙%s, 可用时隙%s"%(self.my_port, str(self.F_list),
+                                                       str(self.master_ID_list), str(self.timeslot_occupied), str(self.timeslot_available)))
             self.broadcast(msg)
 
     def run(self):
         p_fast_send = Process(target=self.fast_send)
-        p_HELLO = Process(target=self.broadcast_HELLO)
+        p_HELLO = threading.Thread(target=self.broadcast_HELLO)
         while True:
             # 如果刚开机
             if self.if_start_up:
@@ -115,15 +119,15 @@ class node:
                 try:
                     while True:
                         data, address = self.recv_socket.recvfrom(BUFSIZ)
-                        des_address, src_address, content, master_ID, F, flag = parse_json(data.decode('utf-8'))
-                        print(flag)
+                        des_address, src_address, content, master_ID, F, F_list, flag = parse_json(data.decode('utf-8'))
+
                         # 如果收到了”快发“或者心跳信息，向其所在的中心节点申请入网
                         # TODO 如果几乎同时收到了两个中心节点的消息，待处理
                         if flag == "FAST_SEND" or flag == "HELLO":
                             print("Receive %s from address %d" % (flag, src_address))
                             # 向master申请入网
                             msg = write_json(des_address=master_ID, src_address=self.my_port,
-                                             content=[], master_ID="", F=F, flag="APPLY")
+                                             content=[], master_ID="", F=F, F_list=self.F_list, flag="APPLY")
                             print("APPLY to master:", master_ID)
                             self.broadcast(msg)
                             # 等待中心节点的确认消息，如果收到ACK，入网成功。如果超时5s未收到ACK，独立建网
@@ -134,13 +138,14 @@ class node:
                                     recv_response = False
                                     break
                                 data, address = self.recv_socket.recvfrom(BUFSIZ)
-                                des_address, src_address, content, master_ID, F, flag = parse_json(
+                                des_address, src_address, content, master_ID, F, F_list, flag = parse_json(
                                     data.decode('utf-8'))
                                 if flag == "ACK" and des_address == self.my_port:
                                     print("Receive ACK from %d, connected to this master" % src_address)
                                     self.master = False
                                     self.timeslot = content
                                     self.timeslot_occupied.append(self.timeslot)
+                                    self.timeslot_available = np.setdiff1d(self.all_available, self.timeslot_occupied)
                                     self.master_ID = master_ID
                                     self.master_ID_list.append(self.master_ID)
                                     self.F = F
@@ -167,7 +172,7 @@ class node:
                     try:
                         while True:
                             data, address = self.recv_socket.recvfrom(BUFSIZ)
-                            des_address, src_address, content, master_ID, F, flag = parse_json(data.decode('utf-8'))
+                            des_address, src_address, content, master_ID, F, F_list, flag = parse_json(data.decode('utf-8'))
 
                             # 收到申请
                             if flag == "APPLY" and des_address == self.my_port:
@@ -186,21 +191,24 @@ class node:
                                                                            applying_timeslot_occupied).tolist()
                                 timeslot_available = np.intersect1d(applying_timeslot_available,
                                                                     self.timeslot_available).tolist()
+
+                                # 分配申请入网节点的时隙,更新可用时隙
+                                allocated_timeslot = timeslot_available[0]
+                                self.timeslot_available = np.delete(self.timeslot_available,
+                                                                    np.where(self.timeslot_available==allocated_timeslot))
                                 # 分配自己的时隙,更新可用时隙
-                                self.timeslot = timeslot_available[0]
+                                self.timeslot = self.timeslot_available[0]
                                 self.timeslot_occupied.append(self.timeslot)
                                 self.timeslot_available = np.delete(self.timeslot_available,
                                                                     np.where(self.timeslot_available==self.timeslot))
-                                # 分配申请入网节点的时隙,更新可用时隙
-                                allocated_timeslot = timeslot_available[1]
-                                self.timeslot_available = np.delete(self.timeslot_available,
-                                                                    np.where(self.timeslot_available==allocated_timeslot))
                                 # 发送ACK
                                 to_port = src_address
                                 self.children.append(to_port)
-                                msg = write_json(des_address=to_port, src_address=self.my_port,
+                                msg = write_json(des_address=to_port, src_address=self.my_port, F_list=self.F_list,
                                                  content=allocated_timeslot, master_ID=self.my_port, F=F, flag="ACK")
-                                print("Send ACK back")
+                                self.F = F
+                                self.F_list.append(self.F)
+                                print("send back ACK， %d入网成功 :"%to_port)
                                 print("子网建成，本端为中心节点%d，时隙：%s，频率：%s，网内节点：%s" % (self.my_port, str(self.timeslot_occupied),
                                                                        str(self.F_list), str(self.children)))
                                 self.broadcast(msg)
@@ -221,7 +229,7 @@ class node:
                 p_HELLO.start()
             # 正常运行模式，持续扫频慢收监听
             data, address = self.recv_socket.recvfrom(BUFSIZ)
-            des_address, src_address, content, master_ID, F, flag = parse_json(data.decode('utf-8'))
+            des_address, src_address, content, master_ID, F, F_list, flag = parse_json(data.decode('utf-8'))
             # 中心节点在运行过程中收到刚开机节点的入网申请
             if self.master:
                 # 收到申请入网消息
@@ -240,23 +248,25 @@ class node:
                         self.timeslot_available = np.delete(self.timeslot_available,
                                                             np.where(self.timeslot_available==allocated_timeslot))
                         self.children.append(to_port)
-                        msg = write_json(des_address=to_port, src_address=self.my_port,
+                        msg = write_json(des_address=to_port, src_address=self.my_port, F_list=self.F_list,
                                          content=allocated_timeslot, master_ID=self.my_port, F=self.F, flag="ACK")
                         self.broadcast(msg)
-                        print("send back ACK to:", to_port)
-                        print("本端为中心节点%d，目前子网内有%d个子节点:%s"%(self.my_port, 7-self.timeslot_available.size-1, str(self.children)))
+                        print("send back ACK， %d入网成功 :"%to_port)
+                        print("本端%d为中心节点%d，目前子网内有%d个子节点:%s"%(self.my_port,
+                                                             self.F, 7-self.timeslot_available.size-1, str(self.children)))
 
             # 如果某新开机节点a无法加入本子网，a进行快发，该节点在新的频率上收到了a的快发消息。则该节点向a申请入网
-            # TODO F not in self.F_list，同一子网内，互相听到hello问题
-            if flag == "FAST_SEND" or flag == "HELLO" and F not in self.F_list \
-                    and len(self.timeslot_occupied)<6 and master_ID not in self.applying:
-                print("Receive %s from address %d" % (flag, src_address))
-                self.applying.append(master_ID)
-                # 向master申请入网,content是自己已占有的时隙， master分配的时候排除这些时隙
-                msg = write_json(des_address=master_ID, src_address=self.my_port,
+            if flag == "FAST_SEND" or flag == "HELLO":
+                if np.intersect1d(F_list, self.F_list).size == 0 and master_ID not in self.applying \
+                    and np.intersect1d(content, self.timeslot_available).size >0:
+
+                    print("Receive %s from address %d" % (flag, src_address))
+                    self.applying.append(master_ID)
+                    # 向master申请入网,content是自己已占有的时隙， master分配的时候排除这些时隙
+                    msg = write_json(des_address=master_ID, src_address=self.my_port, F_list=self.F_list,
                                  content=self.timeslot_occupied, master_ID="", F=F, flag="APPLY")
-                print("APPLY to master:", master_ID)
-                self.broadcast(msg)
+                    print("APPLY to master:", master_ID)
+                    self.broadcast(msg)
             # 收到了该节点在正常运行过程中申请入网之后的确认消息
             if flag == "ACK" and des_address == self.my_port:
                 print("Receive ACK from %d, connected to this master" % src_address)
@@ -265,11 +275,12 @@ class node:
 
                 self.timeslot = content
                 self.timeslot_occupied.append(self.timeslot)
+                self.timeslot_available = np.setdiff1d(self.all_available, self.timeslot_occupied)
                 self.master_ID = master_ID
                 self.master_ID_list.append(self.master_ID)
                 self.F = F
                 self.F_list.append(self.F)
-                print("%d连接至子网，时隙%s：，中心节点%s：，频率%s：" % (self.my_port, str(self.timeslot_occupied),
+                print("%d连接至子网%d，时隙%s：，中心节点%s：，频率%s：" % (self.my_port, F, str(self.timeslot_occupied),
                                                        str(self.master_ID_list), str(self.F_list)))
             # if flag is "HELLO" and F is not self.F:
         self.recv_socket.close()
@@ -286,7 +297,7 @@ class NpEncoder(json.JSONEncoder):
             return super(NpEncoder, self).default(obj)
 
 # 打包报文数据，形成json格式报文
-def write_json(des_address, src_address, content, master_ID, F, flag):
+def write_json(des_address, src_address, content, master_ID, F, F_list, flag):
     python2json = {}
     # route_list = [1, 2, 3]
     python2json["content"] = content
@@ -295,13 +306,14 @@ def write_json(des_address, src_address, content, master_ID, F, flag):
     python2json["flag"] = flag
     python2json["master_ID"] = master_ID
     python2json["F"] = F
+    python2json["F_list"] = F_list
     json_str = json.dumps(python2json, cls=NpEncoder)
     return json_str
 
 def parse_json(json_str):
     json2python = json.loads(json_str)
     return json2python['des_address'], json2python['src_address'], json2python['content'],\
-           json2python['master_ID'], json2python['F'], json2python['flag']
+           json2python['master_ID'], json2python['F'], json2python['F_list'], json2python['flag']
 
-c = node(4)
+c = node(6)
 c.run()
