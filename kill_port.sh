@@ -7,5 +7,5 @@ kill `lsof -t -i:9006`
 kill `lsof -t -i:9007`
 
 For linux:
-kill -9 $(lsof -t -i:9001)
-kill -9 $(lsof -t -i:9002)
+kill -9 $(lsof -t -i:9004)
+kill -9 $(lsof -t -i:9005)
