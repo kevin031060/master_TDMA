@@ -26,19 +26,19 @@ if __name__ == '__main__':
     x_list = None
     seq = ""
     # shell_cmd = 'python3 simulate_batch.py --example=1'
-    shell_cmd = 'python3 simulate_batch.py --num=20'
+    shell_cmd = 'python3 simulate_batch.py --num=10'
     cmd = shlex.split(shell_cmd)
     p = subprocess.Popen(cmd, shell=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     flag = "Receive APPLY from"
     lines = []
-    rep_lines=set([])
+    hello_lines=set([])
     while p.poll() is None:
         line = p.stdout.readline().decode()
         line = line.strip()
         if line:
-            if 'HELLO' in line:
-                if line not in rep_lines:
-                    rep_lines.add(line)
+            if line[:5]=='HELLO' or "fast_sending" in line:
+                if line not in hello_lines:
+                    hello_lines.add(line)
                     print(line)
             else:
                 print(line)
@@ -67,7 +67,18 @@ if __name__ == '__main__':
                     plt.xlim((0,10))
                     plt.ylim((0,0.5))
                     plt.pause(0.01)  # 暂停一秒
+            if 'PIDs' in line:
+                hello_lines_list = list(hello_lines)
+                latest_lines = {}
+                for x in hello_lines_list:
+                    latest_lines[x[:12]] = x
+                for l in latest_lines.values():
+                    if '为中心节点' in l:
+                        print('\033[1;35m %s \033[0m'%l[6:])
+                    else:
+                        print('\033[1;34m %s \033[0m' % l[6:])
 
+    plt.pause(0)
 
     if p.returncode == 0:
         print('Subprogram success')

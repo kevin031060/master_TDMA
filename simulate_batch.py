@@ -7,13 +7,17 @@ import numpy as np
 timesleep = 1.5
 seed = np.random.randint(100000, size=100)
 def simulate_start(sequence):
+    ids=[]
     from simulate import node
     for i in range(len(sequence)):
         node_start = node(sequence[i], seed[i])
         p = Process(target=node_start.run)
         p.start()
+        ids.append(p.pid)
         time.sleep(timesleep)
-
+    time.sleep(8)
+    print("PIDs:",ids)
+    return ids
 def run_batch(args):
 
     if args.example:
@@ -41,7 +45,7 @@ def run_batch(args):
                 break
         print('SEQ:',sequence)
 
-        simulate_start(sequence)
+        return simulate_start(sequence)
     else:
 
         if args.seq is not None:
@@ -83,7 +87,7 @@ def run_batch(args):
                 break
         with open('config.py','r') as f:
             print(f.read())
-        simulate_start(sequence)
+        return simulate_start(sequence)
 
 
 if __name__ == '__main__':
